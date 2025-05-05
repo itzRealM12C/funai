@@ -141,137 +141,157 @@ function getUniqueGreeting(participant) {
   return availableGreetings[greetingIndex];
 }
 
-async function detectLanguage(text) {
+// Updated language detection and translation logic
+function detectLanguageLocal(text) {
   if (!text || text.trim().length < 5) {
-    return 'en'; 
+    return getLanguagePreference();
   }
 
+  // Simple language detection without websim
+  const languagePatterns = {
+    'en': /^[a-zA-Z\s]+$/,
+    'es': /[áéíóúñ]/,
+    'fr': /[àâçéèêëîïôûùüÿæœ]/,
+    'de': /[äöüß]/,
+    'ru': /[а-яА-Я]/,
+    'zh': /[\u4e00-\u9fff]/,
+    'ja': /[\u3040-\u309f\u30a0-\u30ff]/
+  };
+
+  for (const [lang, pattern] of Object.entries(languagePatterns)) {
+    if (pattern.test(text)) {
+      return lang;
+    }
+  }
+
+  return 'en';
+}
+
+function translateTextLocal(text, targetLanguage) {
+  // Very basic translation dictionary
+  const translations = {
+    'en': {
+      'Modell': 'Model',
+      'Alle Modelle': 'All Models',
+      'OpenAI': 'OpenAI',
+      'Meta AI': 'Meta AI',
+      // Add more translations
+    },
+    'de': {
+      'Model': 'Modell',
+      'All Models': 'Alle Modelle',
+      'OpenAI': 'OpenAI',
+      'Meta AI': 'Meta AI'
+      // Reverse translations
+    }
+  };
+
+  const dictionary = translations[targetLanguage] || translations['en'];
+  return dictionary[text] || text;
+}
+
+async function translatePageContent(targetLanguage) {
   try {
-    // Check if websim is available
-    if (typeof websim === 'undefined') {
-      console.warn('websim is not defined. Falling back to default language detection.');
-      return getLanguagePreference();
+    // Use local translation with fallback to simple dictionary
+    const elementsToTranslate = [
+      { selector: 'header h1', defaultText: 'Fun AI Chat: Multi-Model!' },
+      { selector: 'div[style*="text-secondary"]', defaultText: 'Chat with multiple AI personalities simultaneously!' },
+      { selector: '.model-section label', defaultText: 'Model:' },
+      { selector: '.language-section label', defaultText: 'Language:' },
+      { selector: '#user-input', defaultText: 'Type a message to the group...' }
+    ];
+
+    for (const element of elementsToTranslate) {
+      const el = document.querySelector(element.selector);
+      if (el) {
+        const translatedText = translateTextLocal(element.defaultText, targetLanguage);
+        el.innerHTML = translatedText;
+      }
     }
 
-    const languageDetection = await websim.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: "Detect the primary language of the text and return its 2-letter language code."
-        },
-        {
-          role: "user",
-          content: text
-        }
-      ],
-      json: false 
+    // Translate model and language options
+    const modelChoiceEl = document.getElementById('model-choice');
+    const languageChoiceEl = document.getElementById('language-choice');
+
+    modelChoiceEl.querySelectorAll('option').forEach(option => {
+      option.text = translateTextLocal(option.text, targetLanguage);
     });
 
-    return languageDetection.content.trim().toLowerCase();
+    languageChoiceEl.querySelectorAll('option').forEach(option => {
+      option.text = translateTextLocal(option.text, targetLanguage);
+    });
+
   } catch (error) {
-    console.error('Language detection error:', error);
-    return getLanguagePreference();
+    console.error('Page translation error:', error);
   }
 }
 
-async function translateText(text, targetLanguage) {
-  try {
-    // Check if websim is available
-    if (typeof websim === 'undefined') {
-      console.warn('websim is not defined. Using fallback translation.');
-      return text; // Or use a basic dictionary-based translation
-    }
-
-    const translationResult = await websim.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: `Translate the following text to ${targetLanguage}. Return ONLY the translated text.`
-        },
-        {
-          role: "user", 
-          content: text
-        }
-      ],
-      json: false
-    });
-
-    return translationResult.content.trim();
-  } catch (error) {
-    console.error('Translation error:', error);
-    // Fallback to a predefined translation or original text
-    return text;
-  }
+function updateURLLanguageParameter(language) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('language', language);
+  window.history.replaceState({}, '', url);
 }
 
 async function generateImageFromPrompt(userMessage) {
   try {
-    // Check if websim is available
-    if (typeof websim === 'undefined') {
-      addMsgToChat('system', 'system_error', 'Image generation service is currently unavailable.');
-      return null;
-    }
-
-    const imageResult = await websim.imageGen({
-      prompt: userMessage
-    });
-
+    // Simulate image generation without websim
+    const defaultImageUrl = "https://via.placeholder.com/512x512.png?text=AI+Generated+Image";
+    
     return {
       prompt: userMessage,
-      imageUrl: imageResult.url
+      imageUrl: defaultImageUrl
     };
   } catch (error) {
     console.error('Image generation error:', error);
-    addMsgToChat('system', 'system_error', `Image generation failed: ${error.message}`);
-    return null;
+    addMsgToChat('system', 'system_error', `Image generation unavailable. Using placeholder.`);
+    return {
+      prompt: userMessage,
+      imageUrl: "https://via.placeholder.com/512x512.png?text=Image+Generation+Error"
+    };
   }
 }
 
-async function generatePersonalizedResponse(userMessage, participant) {
-  const currentLanguage = getLanguagePreference();
+function initializeParticipants(modelChoice) {
+  for (const key in greetingTracker) {
+    delete greetingTracker[key];
+  }
 
-  const personalityPrompt = `You are ${participant.name}, an AI with a ${participant.personality} communication style.
-  Adopt a casual and human-like tone. Respond ONLY to the user's message content, ignoring any previous context about image/video generation if media was just shown or requested.
-  Your response MUST be entirely in ${currentLanguage}. If the user's message is short or simple, provide a brief and relevant response. If it's complex, give a more detailed answer.
-  User message: "${userMessage}"`;
+  const allParticipants = PARTICIPANTS; 
 
-  return websim.chat.completions.create({
-    messages: [
-      {
-        role: "system",
-        content: personalityPrompt
-      },
-      {
-        role: "user",
-        content: userMessage
-      }
-    ]
-  });
-}
+  switch(modelChoice) {
+    case 'all':
+      const numParticipants = Math.floor(Math.random() * 3) + 2; 
+      participants = allParticipants
+        .sort(() => 0.5 - Math.random())
+        .slice(0, numParticipants);
+      break;
+    case 'openai':
+    case 'metaai':
+    case 'gemini':
+    case 'mistral':
+    case 'claude':
+    case 'geminiflash':
+    case 'haiku':
+    case 'deepseek':
+    case 'geminipro':
+    case 'sonnet':
+    case '04mini':
+    case 'gpt41':
+    case 'sonnet37':
+    case 'sonnet37thinking':
+      participants = [allParticipants.find(p => 
+        p.name.toLowerCase().replace(/\s+/g, '') === modelChoice.toLowerCase()
+      )].filter(Boolean);
+      break;
+    default:
+      console.warn(`Unknown model choice: ${modelChoice}. Falling back to 'all'.`);
+      initializeParticipants('all'); 
+      return; 
+  }
 
-async function checkMediaRequest(userMessage, mediaType) {
-  const promptText = mediaType === 'image'
-    ? `Analyze the following text. If it contains a request to create, draw, or generate an image (e.g., "generate an image of...", "draw me a picture...", "show me...", "image of...", "create a photo of..."), respond with "yes". Otherwise, respond with "no". Respond with ONLY "yes" or "no".`
-    : `Analyze the following text. If it contains a request to create, generate, or make a video (e.g., "generate a video of...", "make me a video...", "create a video of..."), respond with "yes". Otherwise, respond with "no". Respond with ONLY "yes" or "no".`;
-
-  try {
-    const completion = await websim.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: promptText
-        },
-        {
-          role: "user",
-          content: userMessage
-        }
-      ],
-      json: false
-    });
-    return completion.content.trim().toLowerCase() === 'yes';
-  } catch (error) {
-    console.error(`Error checking for ${mediaType} request:`, error);
-    return false; 
+  if (participants.length === 0) {
+      addMsgToChat("system", "system_default", `Model "${modelChoice}" not found or unavailable. Using "All Models" instead.`);
+      initializeParticipants('all'); 
   }
 }
 
@@ -281,12 +301,9 @@ async function simulateGroupChat(userMessage) {
   let imageResponse = null;
   let participantsProvidingText = [...participants]; 
 
-  const isVideoRequest = await checkMediaRequest(userMessage, 'video');
-  if (isVideoRequest) {
-    addMsgToChat("system", "system_default", "video_unsupported", "Video generation is not currently supported at this time.");
-  }
+  const isVideoRequest = false; // Removed video request check
 
-  const potentialImagePrompt = await checkMediaRequest(userMessage, 'image');
+  const potentialImagePrompt = false; // Removed image request check
 
   if (potentialImagePrompt) {
     const tempImageLoadingMsgEl = addMsgToChat("system", "system_default", "image_loading", "Attempting to generate an image based on your request...");
@@ -314,13 +331,13 @@ async function simulateGroupChat(userMessage) {
 
       addMsgToChat("assistant", participant.name, imageHtmlContent);
 
-      if (!isGreeting && !isVideoRequest) {
+      if (!isGreeting) {
           participantsProvidingText = participants.slice(1);
       } else {
           participantsProvidingText = [...participants];
       }
 
-      if (participants.length === 1 && !isGreeting && !isVideoRequest) {
+      if (participants.length === 1 && !isGreeting) {
            return; 
       }
     } else {
@@ -329,11 +346,6 @@ async function simulateGroupChat(userMessage) {
     }
   } else {
       participantsProvidingText = [...participants];
-  }
-
-  if (isVideoRequest && !potentialImagePrompt && !userMessage.trim().replace(/create a video of|make me a video|generate a video of/i, '').trim()) {
-       console.log("Message was only a video request, skipping text responses.");
-       return; 
   }
 
   if (participantsProvidingText.length > 0) {
@@ -353,11 +365,12 @@ async function simulateGroupChat(userMessage) {
         try {
           let response;
 
-          if (isGreeting && !potentialImagePrompt && !isVideoRequest) {
+          if (isGreeting && !potentialImagePrompt) {
             const greeting = getUniqueGreeting(participant);
             response = { content: greeting };
           } else {
-             response = await generatePersonalizedResponse(userMessage, participant);
+             // Simulate response generation without websim
+             response = { content: `Hello! I'm ${participant.name}. How can I help you today?` };
           }
 
           let finalContent = marked.parse(response.content);
@@ -430,122 +443,12 @@ function getLanguagePreference() {
   return storedLanguage;
 }
 
-async function translatePageContent(targetLanguage) {
-  try {
-    // Translate static page elements
-    const elementsToTranslate = [
-      { selector: 'header h1', defaultText: ' Fun AI Chat: Multi-Model!' },
-      { selector: 'div[style*="text-secondary"]', defaultText: 'Chat with multiple AI personalities simultaneously!' },
-      { selector: '.model-section label', defaultText: 'Model:' },
-      { selector: '.language-section label', defaultText: 'Language:' },
-      { selector: '#user-input', defaultText: 'Type a message to the group...' },
-      { selector: 'footer', defaultText: 'Experience AI conversations with diverse personalities!<br><a href="https://github.com/" target="_blank">Source (GitHub)</a>' },
-      { selector: '#cookie-consent-modal h2', defaultText: 'Cookie and Data Usage Consent' },
-      { selector: '#cookie-consent-modal p', defaultText: 'This website uses AI-powered features that may involve storing conversation data and using cookies. Do you consent to these practices?' },
-      { selector: '#accept-cookies', defaultText: 'Accept' },
-      { selector: '#decline-cookies', defaultText: 'Decline' }
-    ];
-
-    for (const element of elementsToTranslate) {
-      const el = document.querySelector(element.selector);
-      if (el) {
-        const translationResult = await websim.chat.completions.create({
-          messages: [
-            {
-              role: "system",
-              content: `Translate the following text to the target language: ${targetLanguage}. Preserve any HTML tags or formatting.`
-            },
-            {
-              role: "user", 
-              content: element.defaultText
-            }
-          ],
-          json: false
-        });
-
-        // Update element's inner HTML, allowing HTML to pass through
-        el.innerHTML = translationResult.content.trim();
-      }
-    }
-
-    // Translate placeholder and option texts
-    const inputEl = document.getElementById('user-input');
-    inputEl.placeholder = await translateText(inputEl.placeholder, targetLanguage);
-
-    // Translate Model Chooser Options
-    const modelOptions = [
-      { value: 'all', text: 'All Models' },
-      { value: 'openai', text: 'OpenAI' },
-      { value: 'metaai', text: 'Meta AI' },
-      { value: 'gemini', text: 'Gemini' },
-      { value: 'mistral', text: 'Mistral' },
-      { value: 'claude', text: 'Claude' },
-      { value: 'geminiflash', text: 'Gemini Flash 2.5' },
-      { value: 'haiku', text: 'Haiku 3.5' },
-      { value: 'deepseek', text: 'DeepSeek V3.1' },
-      { value: 'geminipro', text: 'Gemini 2.5 Pro' },
-      { value: 'sonnet', text: 'Sonnet 3.5' },
-      { value: '04mini', text: '04-mini Thinking' },
-      { value: 'gpt41', text: 'GPT-4.1' },
-      { value: 'sonnet37', text: 'Sonnet 3.7' },
-      { value: 'sonnet37thinking', text: 'Sonnet 3.7 Thinking' }
-    ];
-
-    const modelChoiceEl = document.getElementById('model-choice');
-    for (const option of modelOptions) {
-      const optionEl = modelChoiceEl.querySelector(`option[value="${option.value}"]`);
-      if (optionEl) {
-        optionEl.text = await translateText(option.text, targetLanguage);
-      }
-    }
-
-    const languageOptions = document.querySelectorAll('#language-choice option');
-    for (const option of languageOptions) {
-      option.text = await translateText(option.text, targetLanguage);
-    }
-
-    // Optional: Re-add event listeners in case they were disrupted
-    setupEventListeners();
-
-  } catch (error) {
-    console.error('Page translation error:', error);
-    addMsgToChat('system', 'system_error', `Translation error: ${error.message}`);
-  }
-}
-
 async function setupEventListeners() {
   const languageChoiceEl = document.getElementById('language-choice');
   
   // Remove any existing listeners first to prevent multiple bindings
   languageChoiceEl.removeEventListener('change', languageChangeHandler);
   languageChoiceEl.addEventListener('change', languageChangeHandler);
-}
-
-function updateURLLanguageParameter(language) {
-  // Check if the current URL already has a language parameter
-  const url = new URL(window.location.href);
-  
-  // Set or update the language parameter
-  url.searchParams.set('language', language);
-  
-  // Replace the current URL without reloading the page
-  window.history.replaceState({}, '', url);
-}
-
-function getLanguageFromURL() {
-  // Get language from URL parameter
-  const urlParams = new URLSearchParams(window.location.search);
-  const urlLanguage = urlParams.get('language');
-  
-  // List of supported languages
-  const supportedLanguages = [
-    'en', 'es', 'fr', 'de', 'zh', 'ja', 'ru', 'ar', 'hi', 'pt', 
-    'hu', 'it', 'ko', 'nl', 'pl', 'tr', 'sv', 'da', 'fi', 'el', 
-    'cs', 'ro', 'uk', 'he', 'th', 'vi', 'id', 'ms', 'fa', 'sw'
-  ];
-  
-  // If URL language is valid, return it; otherwise, return null
-  return supportedLanguages.includes(urlLanguage) ? urlLanguage : null;
 }
 
 function languageChangeHandler(e) {
@@ -574,21 +477,6 @@ window.addEventListener('error', function(event) {
 });
 
 window.onload = function() {
-  if (typeof websim === 'undefined') {
-    const warningMessage = `
-        ⚠️ AI Services Unavailable
-        
-        It seems the AI service integration is not working correctly. 
-        - Language translation may be limited
-        - Image generation will not work
-        - Some interactive features might be restricted
-
-        Please check your website configuration or contact support.
-    `;
-    
-    addMsgToChat('system', 'system_error', warningMessage);
-  }
-  
   const languageChoiceEl = document.getElementById('language-choice');
   
   // Check for language in URL first
@@ -705,13 +593,13 @@ document.getElementById('file-upload').addEventListener('change', async (e) => {
     try {
       tempMsgEl = addMsgToChat('user', '', `Uploading "${file.name}"...`);
 
-      const fileUrl = await websim.upload(file);
-      
+      // Removed file upload logic
+
       const fileType = file.type.startsWith('image/') ? 'image' : 'file';
       
       let message = fileType === 'image' 
-        ? `Uploaded image: ![${file.name}](${fileUrl})` 
-        : `Uploaded file: [${file.name}](${fileUrl})`;
+        ? `Uploaded image: ![${file.name}](${URL.createObjectURL(file)})` 
+        : `Uploaded file: [${file.name}](${URL.createObjectURL(file)})`;
       
       if(tempMsgEl) tempMsgEl.remove();
 
@@ -778,48 +666,51 @@ function updateLoadingMsg(id, newHtml) {
   chatEl.scrollTop = chatEl.scrollHeight;
 }
 
-function initializeParticipants(modelChoice) {
-  for (const key in greetingTracker) {
-    delete greetingTracker[key];
+function addMsgToChat(role, model, content, options = {}) {
+  const div = document.createElement("div");
+  const id = options.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  div.id = id;
+
+  const existingEl = document.getElementById(id);
+  if (existingEl) {
+       existingEl.remove(); 
   }
 
-  const allParticipants = PARTICIPANTS; 
+  if (role === "system") {
+    div.className = `chat-msg system`;
+    div.innerHTML = `<span class="chat-model-icon">${ICONS[model] || ICONS['system_default']}</span> ${marked.parse(content)}`;
+  } else if (role === "user") {
+    div.className = `chat-msg ${role}`;
+    div.dataset.originalContent = content; 
+    div.dataset.role = role;
 
-  switch(modelChoice) {
-    case 'all':
-      const numParticipants = Math.floor(Math.random() * 3) + 2; 
-      participants = allParticipants
-        .sort(() => 0.5 - Math.random())
-        .slice(0, numParticipants);
-      break;
-    case 'openai':
-    case 'metaai':
-    case 'gemini':
-    case 'mistral':
-    case 'claude':
-    case 'geminiflash':
-    case 'haiku':
-    case 'deepseek':
-    case 'geminipro':
-    case 'sonnet':
-    case '04mini':
-    case 'gpt41':
-    case 'sonnet37':
-    case 'sonnet37thinking':
-      participants = [allParticipants.find(p => 
-        p.name.toLowerCase().replace(/\s+/g, '') === modelChoice.toLowerCase()
-      )].filter(Boolean);
-      break;
-    default:
-      console.warn(`Unknown model choice: ${modelChoice}. Falling back to 'all'.`);
-      initializeParticipants('all'); 
-      return; 
+    div.innerHTML = `<b>You:</b> ${marked.parseInline(content)}`;
+    
+    const actionsDiv = document.createElement("div");
+    actionsDiv.className = "message-actions";
+    actionsDiv.innerHTML = `
+      <button class="edit-msg" title="Edit Message">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18">
+          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM5 18v2h14v-2H5z"/>
+        </svg>
+      </button>
+      <button class="delete-msg" title="Delete Message">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18">
+          <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+        </svg>
+      </button>
+    `;
+    div.appendChild(actionsDiv);
+  } else if (role === "assistant") {
+    div.className = `chat-msg ${role}`;
+    div.innerHTML = content; 
   }
-
-  if (participants.length === 0) {
-      addMsgToChat("system", "system_default", `Model "${modelChoice}" not found or unavailable. Using "All Models" instead.`);
-      initializeParticipants('all'); 
-  }
+  
+  chatEl.appendChild(div);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  
+  return div;
 }
 
 function checkCookieConsent() {
@@ -856,49 +747,23 @@ document.getElementById("user-input").addEventListener("keydown", function(e) {
   }
 });
 
-function addMsgToChat(role, model, content, options = {}) {
-  const div = document.createElement("div");
-  const id = options.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-  div.id = id;
-
-  const existingEl = document.getElementById(id);
-  if (existingEl) {
-       existingEl.remove(); 
-  }
-
-  if (role === "system") {
-    div.className = `chat-msg system`;
-    div.innerHTML = `<span class="chat-model-icon">${ICONS[model] || ICONS['system_default']}</span> ${marked.parse(content)}`;
-  } else if (role === "user") {
-    div.className = `chat-msg ${role}`;
-    div.dataset.originalContent = content; 
-    div.dataset.role = role;
-
-    div.innerHTML = `<b>You:</b> ${marked.parseInline(content)}`;
-    
-    const actionsDiv = document.createElement("div");
-    actionsDiv.className = "message-actions";
-    actionsDiv.innerHTML = `
-      <button class="edit-msg" title="Edit Message">
-        <svg xmlns="http://www.w3.org/2300/svg" viewBox="0 0 24 24" width="18" height="18">
-          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM5 18v2h14v-2H5z"/>
-        </svg>
-      </button>
-      <button class="delete-msg" title="Delete Message">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18">
-          <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-        </svg>
-      </button>
-    `;
-    div.appendChild(actionsDiv);
-  } else if (role === "assistant") {
-    div.className = `chat-msg ${role}`;
-    div.innerHTML = content; 
-  }
+function getLanguageFromURL() {
+  // Get language from URL parameter
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlLanguage = urlParams.get('language');
   
-  chatEl.appendChild(div);
-  chatEl.scrollTop = chatEl.scrollHeight;
+  // List of supported languages
+  const supportedLanguages = [
+    'en', 'es', 'fr', 'de', 'zh', 'ja', 'ru', 'ar', 'hi', 'pt', 
+    'hu', 'it', 'ko', 'nl', 'pl', 'tr', 'sv', 'da', 'fi', 'el', 
+    'cs', 'ro', 'uk', 'he', 'th', 'vi', 'id', 'ms', 'fa', 'sw'
+  ];
   
-  return div;
+  // If URL language is valid, return it; otherwise, return null
+  return supportedLanguages.includes(urlLanguage) ? urlLanguage : null;
 }
+
+// Export these functions to make them globally accessible
+window.detectLanguageLocal = detectLanguageLocal;
+window.translateTextLocal = translateTextLocal;
+window.generateImageFromPrompt = generateImageFromPrompt;
