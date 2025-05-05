@@ -115,6 +115,20 @@ const PARTICIPANTS = [
   ]}
 ];
 
+const FALLBACK_TRANSLATIONS = {
+  'en': {
+    language: {
+      'all': 'All Models',
+      // Add more fallback translations here
+    },
+    system_messages: {
+      'api_error': 'An AI service is temporarily unavailable. Please try again later.',
+      'translation_error': 'Unable to translate content automatically.'
+    }
+  },
+  // Add more language fallbacks
+};
+
 let greetingTracker = {};
 
 function getUniqueGreeting(participant) {
@@ -132,14 +146,18 @@ async function detectLanguage(text) {
     return 'en'; 
   }
 
-  const currentLanguage = getLanguagePreference();
-
   try {
+    // Check if websim is available
+    if (typeof websim === 'undefined') {
+      console.warn('websim is not defined. Falling back to default language detection.');
+      return getLanguagePreference();
+    }
+
     const languageDetection = await websim.chat.completions.create({
       messages: [
         {
           role: "system",
-          content: `Detect the primary language of the following text and return ONLY its language code (e.g., 'en' for English, 'es' for Spanish, 'fr' for French, etc.) as a plain string, with no other text or JSON formatting. Respond with a 2-letter code or 'unknown'. Use the user's current language preference: ${currentLanguage}`
+          content: "Detect the primary language of the text and return its 2-letter language code."
         },
         {
           role: "user",
@@ -149,16 +167,63 @@ async function detectLanguage(text) {
       json: false 
     });
 
-    const languageCode = languageDetection.content.trim().toLowerCase();
-    if (/^[a-z]{2}$/.test(languageCode)) {
-        return languageCode;
-    } else {
-        console.warn('AI returned non-standard or unknown language code:', languageCode);
-        return currentLanguage; 
-    }
+    return languageDetection.content.trim().toLowerCase();
   } catch (error) {
     console.error('Language detection error:', error);
-    return currentLanguage;
+    return getLanguagePreference();
+  }
+}
+
+async function translateText(text, targetLanguage) {
+  try {
+    // Check if websim is available
+    if (typeof websim === 'undefined') {
+      console.warn('websim is not defined. Using fallback translation.');
+      return text; // Or use a basic dictionary-based translation
+    }
+
+    const translationResult = await websim.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content: `Translate the following text to ${targetLanguage}. Return ONLY the translated text.`
+        },
+        {
+          role: "user", 
+          content: text
+        }
+      ],
+      json: false
+    });
+
+    return translationResult.content.trim();
+  } catch (error) {
+    console.error('Translation error:', error);
+    // Fallback to a predefined translation or original text
+    return text;
+  }
+}
+
+async function generateImageFromPrompt(userMessage) {
+  try {
+    // Check if websim is available
+    if (typeof websim === 'undefined') {
+      addMsgToChat('system', 'system_error', 'Image generation service is currently unavailable.');
+      return null;
+    }
+
+    const imageResult = await websim.imageGen({
+      prompt: userMessage
+    });
+
+    return {
+      prompt: userMessage,
+      imageUrl: imageResult.url
+    };
+  } catch (error) {
+    console.error('Image generation error:', error);
+    addMsgToChat('system', 'system_error', `Image generation failed: ${error.message}`);
+    return null;
   }
 }
 
@@ -210,71 +275,6 @@ async function checkMediaRequest(userMessage, mediaType) {
   }
 }
 
-async function generateImageFromPrompt(userMessage) {
-  try {
-    const detectedLanguage = await detectLanguage(userMessage);
-
-    const imagePromptExtraction = await websim.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: `Analyze the following message. If it contains a clear request to create, draw, or generate an image, extract the prompt for image generation. If the message is not in English, translate the extracted prompt to English while preserving the original intent. If no such request or clear prompt is found, respond with just the word "null". Otherwise, provide the extracted prompt as a plain string suitable for an image generator. Respond with ONLY the extracted prompt or "null".`
-        },
-        {
-          role: "user",
-          content: userMessage
-        }
-      ],
-      json: false 
-    });
-
-    const prompt = imagePromptExtraction.content.trim();
-    if (!prompt || prompt.toLowerCase() === 'null') {
-      return null; 
-    }
-
-    console.log("Extracted image prompt:", prompt);
-    console.log("Detected language:", detectedLanguage);
-
-    const result = await websim.imageGen({
-      prompt: detectedLanguage === 'en' ? prompt : await translateToEnglish(prompt)
-    });
-
-    console.log("Generated image URL:", result.url);
-    return {
-      prompt: prompt,
-      translatedPrompt: detectedLanguage === 'en' ? null : await translateToEnglish(prompt),
-      imageUrl: result.url
-    };
-  } catch (error) {
-    console.error('websim.imageGen error:', error);
-    return null;
-  }
-}
-
-async function translateToEnglish(text) {
-  try {
-    const translation = await websim.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: "Translate the following text to English while preserving the original intent, context, and details. Respond with ONLY the English translation."
-        },
-        {
-          role: "user",
-          content: text
-        }
-      ],
-      json: false
-    });
-
-    return translation.content.trim();
-  } catch (error) {
-    console.error('Translation error:', error);
-    return text; 
-  }
-}
-
 async function simulateGroupChat(userMessage) {
   const isGreeting = /^(hi|hey|hello|sup|greetings)/i.test(userMessage.trim());
 
@@ -310,10 +310,6 @@ async function simulateGroupChat(userMessage) {
         <p>Here's the image I generated for you:</p>
         <p><img src="${imageResponse.imageUrl}" alt="Generated Image"></p>
         <p><em>Original prompt: ${imageResponse.prompt}</em></p>
-        ${imageResponse.translatedPrompt ? `<p><em>English translation: ${imageResponse.translatedPrompt}</em></p>` : ''}
-        <button class="download-image" data-url="${imageResponse.imageUrl}" aria-label="Download Generated Image">
-          ${downloadSvg} Download Image
-        </button>
       `;
 
       addMsgToChat("assistant", participant.name, imageHtmlContent);
@@ -517,30 +513,7 @@ async function translatePageContent(targetLanguage) {
   }
 }
 
-async function translateText(text, targetLanguage) {
-  try {
-    const translationResult = await websim.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: `Translate the following text to the target language: ${targetLanguage}. Return ONLY the translated text.`
-        },
-        {
-          role: "user", 
-          content: text
-        }
-      ],
-      json: false
-    });
-
-    return translationResult.content.trim();
-  } catch (error) {
-    console.error('Text translation error:', error);
-    return text; // Fallback to original text
-  }
-}
-
-function setupEventListeners() {
+async function setupEventListeners() {
   const languageChoiceEl = document.getElementById('language-choice');
   
   // Remove any existing listeners first to prevent multiple bindings
@@ -594,7 +567,28 @@ function languageChangeHandler(e) {
   }
 }
 
-window.onload = () => {
+window.addEventListener('error', function(event) {
+  if (event.message.includes('websim is not defined')) {
+    addMsgToChat('system', 'system_error', 'AI services are temporarily unavailable. Some features will be limited.');
+  }
+});
+
+window.onload = function() {
+  if (typeof websim === 'undefined') {
+    const warningMessage = `
+        ⚠️ AI Services Unavailable
+        
+        It seems the AI service integration is not working correctly. 
+        - Language translation may be limited
+        - Image generation will not work
+        - Some interactive features might be restricted
+
+        Please check your website configuration or contact support.
+    `;
+    
+    addMsgToChat('system', 'system_error', warningMessage);
+  }
+  
   const languageChoiceEl = document.getElementById('language-choice');
   
   // Check for language in URL first
